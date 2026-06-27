@@ -611,8 +611,19 @@
 </head>
 <body>
 
+<!-- LOADING SCREEN -->
+<div id="loading-view" class="login-wrapper" style="z-index: 10000; background: var(--navy);">
+  <div class="login-card" style="box-shadow: none; border: none; background: transparent;">
+    <div class="login-logo" style="animation: pulse 1.5s infinite;">Flow<span>Track</span></div>
+    <div class="login-sub" style="margin-top: 10px;">Verifying session...</div>
+  </div>
+</div>
+<style>
+  @keyframes pulse { 0% { opacity: 0.5; } 50% { opacity: 1; } 100% { opacity: 0.5; } }
+</style>
+
 <!-- AUTHENTICATION SCREEN -->
-<div id="auth-view" class="login-wrapper">
+<div id="auth-view" class="login-wrapper" style="display: none;">
   <div class="login-card">
     <div class="login-logo">Flow<span>Track</span></div>
     <div class="login-sub" id="auth-subtitle">Create your account profile</div>
@@ -659,6 +670,7 @@
         <option>2024</option><option>2025</option><option selected>2026</option><option>2027</option>
       </select>
     </div>
+    <button class="add-btn" onclick="handleLogout()" style="margin-right:10px;">Logout</button>
     <button class="save-btn" onclick="saveData()">Save ✓</button>
   </div>
 </header>
@@ -853,18 +865,18 @@
 <script type="module">
 import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
 import { getAnalytics } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-analytics.js";
-import { getAuth, signInAnonymously, signInWithCustomToken } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
-import { getFirestore, doc, getDoc, setDoc, deleteDoc, collection, getDocs, addDoc, disableNetwork } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+import { getAuth, createUserWithEmailAndPassword, signInWithEmailAndPassword, onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+import { getFirestore, doc, getDoc, setDoc, deleteDoc, collection, getDocs, addDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
-// 🚀 REPLACE THIS OBJECT WITH YOUR REAL FIREBASE CONFIG WHEN READY
+// 🚀 PASTE YOUR REAL FIREBASE CONFIG HERE TO MAKE GITHUB PAGES WORK
 const firebaseConfig = {
-  apiKey: "YOUR_API_KEY",
-  authDomain: "your-app-id.firebaseapp.com",
-  projectId: "your-project-id",
-  storageBucket: "your-project-id.firebasestorage.app",
-  messagingSenderId: "1234567890",
-  appId: "1:1234567890:web:abcdef123456",
-  measurementId: "G-XXXXXXXXXX"
+  apiKey: "YOUR_API_KEY", // <--- PUT YOUR REAL KEY BACK HERE!
+  authDomain: "cashflowtracker-5b8f4.firebaseapp.com",
+  projectId: "cashflowtracker-5b8f4",
+  storageBucket: "cashflowtracker-5b8f4.firebasestorage.app",
+  messagingSenderId: "803375491476",
+  appId: "1:803375491476:web:45097b7d7a096f380a4781",
+  measurementId: "G-5YSY18MLGB"
 };
 
 // If the API key is still the placeholder, we fallback to LocalStorage
@@ -886,6 +898,7 @@ let userProfile = null;
 window.toggleAuth = toggleAuth;
 window.handleSignup = handleSignup;
 window.handleLogin = handleLogin;
+window.handleLogout = handleLogout;
 window.toggleForm = toggleForm;
 window.addIncome = addIncome;
 window.deleteIncome = deleteIncome;
@@ -901,66 +914,51 @@ window.saveData = saveData;
 async function initFirebase() {
   if (isMock) {
     console.warn("Notice: Using LocalStorage fallback mode. Update 'firebaseConfig' to enable cloud sync.");
-    await checkProfile();
+    checkLocalProfile();
     return;
   }
 
-  try {
-    await signInAnonymously(auth);
-    userId = auth.currentUser?.uid;
-    if (!userId) throw new Error("Authentication failed");
-    await checkProfile();
-  } catch (error) {
-    console.error("Firebase init error:", error);
-    
-    // Stop Firestore from endlessly retrying in the background if network is blocked
-    if (db) {
-      try { await disableNetwork(db); } catch(e) {}
+  // Listen for real authentication state changes
+  onAuthStateChanged(auth, async (user) => {
+    if (user) {
+      userId = user.uid;
+      try {
+        await loadUserProfile();
+        await loadDashboardData();
+      } catch (err) {
+        console.error("Error loading user data:", err);
+        // Fallback so the user isn't stuck if database rules block the read
+        if (!userProfile) userProfile = { name: "User" };
+      }
+      enterDashboard();
+    } else {
+      userId = null;
+      userProfile = null;
+      document.getElementById('loading-view').style.display = 'none';
+      document.getElementById('auth-view').style.display = 'flex';
+      document.getElementById('dashboard-view').style.display = 'none';
+      toggleAuth('login');
     }
-    
-    // Graceful fallback to LocalStorage if Auth isn't properly configured yet
-    let errMsg = "Database connection failed.";
-    if (error?.message && error.message.includes("offline")) {
-      errMsg = "Network/Sandbox restricted (Offline).";
-    } else if (error?.code === 'auth/configuration-not-found' || error?.code === 'auth/operation-not-allowed') {
-      errMsg = "Anonymous sign-in not enabled in Firebase Console (Authentication > Sign-in method).";
-    } else if (error?.code === 'unavailable') {
-      errMsg = "Firestore backend unreachable.";
-    }
-    
-    showAuthError(errMsg + " Falling back to local storage.");
-    
-    // Activate fallback mode so the app doesn't crash completely
-    isMock = true;
-    userId = 'local-user';
-    await checkProfile();
+  });
+}
+
+function checkLocalProfile() {
+  const localProf = localStorage.getItem('ft_profile');
+  if (localProf) {
+    userProfile = JSON.parse(localProf);
+    toggleAuth('login');
+  } else {
+    toggleAuth('signup');
   }
 }
 
-async function checkProfile() {
-  if (isMock) {
-    const localProf = localStorage.getItem('ft_profile');
-    if (localProf) {
-      userProfile = JSON.parse(localProf);
-      toggleAuth('login');
-    } else {
-      toggleAuth('signup');
-    }
-    return;
-  }
-
-  try {
-    const profileRef = doc(db, 'artifacts', appId, 'users', userId, 'profile', 'data');
-    const snap = await getDoc(profileRef);
-    if (snap.exists()) {
-      userProfile = snap.data();
-      toggleAuth('login');
-    } else {
-      toggleAuth('signup');
-    }
-  } catch (error) {
-    // If getting the profile fails (e.g., Firestore not initialized), throw it up to initFirebase
-    throw error;
+async function loadUserProfile() {
+  const profileRef = doc(db, 'artifacts', appId, 'users', userId, 'profile', 'data');
+  const snap = await getDoc(profileRef);
+  if (snap.exists()) {
+    userProfile = snap.data();
+  } else {
+    userProfile = { name: "User" }; // Fallback
   }
 }
 
@@ -989,9 +987,8 @@ async function handleSignup(e) {
     return;
   }
 
-  userProfile = { name, email, password: pwd };
-  
   if (isMock) {
+    userProfile = { name, email, password: pwd };
     localStorage.setItem('ft_profile', JSON.stringify(userProfile));
     await loadDashboardData();
     enterDashboard();
@@ -999,16 +996,20 @@ async function handleSignup(e) {
   }
 
   try {
+    const userCredential = await createUserWithEmailAndPassword(auth, email, pwd);
+    userId = userCredential.user.uid;
+    userProfile = { name, email };
+    
+    // Save profile data to database
     const profileRef = doc(db, 'artifacts', appId, 'users', userId, 'profile', 'data');
     await setDoc(profileRef, userProfile);
-    await loadDashboardData();
-    enterDashboard();
+    
   } catch (error) {
     console.error(error);
-    if (error?.code === 'permission-denied') {
-      showAuthError("Database locked. Did you create your Firestore Database in Test Mode?");
+    if (error.code === 'auth/email-already-in-use') {
+       showAuthError("Email already in use. Please log in.");
     } else {
-      showAuthError("Failed to create profile. Try again.");
+       showAuthError("Failed to create account: " + error.message);
     }
   }
 }
@@ -1018,16 +1019,35 @@ async function handleLogin(e) {
   const email = document.getElementById('loginEmail').value.trim();
   const pwd = document.getElementById('loginPassword').value;
   
-  if (!userProfile) {
-    showAuthError("No account found. Please sign up first.");
+  if (isMock) {
+    if (!userProfile) return showAuthError("No account found. Sign up first.");
+    if (email === userProfile.email && pwd === userProfile.password) {
+      await loadDashboardData();
+      enterDashboard();
+    } else {
+      showAuthError("Incorrect email or password.");
+    }
     return;
   }
 
-  if (email === userProfile.email && pwd === userProfile.password) {
-    await loadDashboardData();
-    enterDashboard();
-  } else {
+  try {
+    await signInWithEmailAndPassword(auth, email, pwd);
+    // onAuthStateChanged will handle the dashboard entry automatically
+  } catch (error) {
     showAuthError("Incorrect email or password.");
+  }
+}
+
+async function handleLogout() {
+  if (isMock) {
+    document.getElementById('auth-view').style.display = 'flex';
+    document.getElementById('dashboard-view').style.display = 'none';
+    return;
+  }
+  try {
+    await signOut(auth);
+  } catch(e) {
+    console.error("Logout failed", e);
   }
 }
 
@@ -1041,6 +1061,7 @@ function showAuthError(msg) {
 }
 
 function enterDashboard() {
+  document.getElementById('loading-view').style.display = 'none';
   document.getElementById('auth-view').style.display = 'none';
   document.getElementById('dashboard-view').style.display = 'block';
   document.getElementById('welcomeName').textContent = userProfile.name;
