@@ -1,3 +1,4 @@
+
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -883,11 +884,16 @@ const firebaseConfig = {
 let isMock = firebaseConfig.apiKey === "YOUR_API_KEY" || firebaseConfig.apiKey === "";
 
 let app, auth, db, analytics;
-if (!isMock) {
-  app = initializeApp(firebaseConfig);
-  analytics = getAnalytics(app);
-  auth = getAuth(app);
-  db = getFirestore(app);
+try {
+  if (!isMock) {
+    app = initializeApp(firebaseConfig);
+    analytics = getAnalytics(app);
+    auth = getAuth(app);
+    db = getFirestore(app);
+  }
+} catch (err) {
+  console.error("Firebase initialization failed. Falling back to local mode.", err);
+  isMock = true; // Force fallback mode if Firebase crashes
 }
 
 const appId = 'flowtrack-production'; 
@@ -918,8 +924,16 @@ async function initFirebase() {
     return;
   }
 
+  // Safety timeout: If Firebase gets stuck, force the login screen to show
+  const fallbackTimer = setTimeout(() => {
+    document.getElementById('loading-view').style.display = 'none';
+    document.getElementById('auth-view').style.display = 'flex';
+  }, 4000);
+
   // Listen for real authentication state changes
   onAuthStateChanged(auth, async (user) => {
+    clearTimeout(fallbackTimer); // Clear safety timer
+    
     if (user) {
       userId = user.uid;
       try {
@@ -943,6 +957,10 @@ async function initFirebase() {
 }
 
 function checkLocalProfile() {
+  // FIX: Ensure loading screen hides and auth view shows when in offline/mock mode
+  document.getElementById('loading-view').style.display = 'none';
+  document.getElementById('auth-view').style.display = 'flex';
+
   const localProf = localStorage.getItem('ft_profile');
   if (localProf) {
     userProfile = JSON.parse(localProf);
